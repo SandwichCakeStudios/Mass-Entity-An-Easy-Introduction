@@ -2,7 +2,7 @@
 
 > A beginner-friendly guide to Unreal Engine's high-performance Entity Component System
 
-Information have been collected from multiple sources and AI has been used to analyze it and create a well-structured precentation.
+Information have been collected from multiple sources and AI has been used to analyze it and create a well-structured presentation.
 It may be error proned but we will go through it manually and edit it.
 
 For more deep dive into mass we recommend [MassSample GitHub](https://github.com/Megafunk/MassSample) - Community sample project with documentation
