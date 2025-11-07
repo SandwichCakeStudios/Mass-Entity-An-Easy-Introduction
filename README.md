@@ -2,21 +2,24 @@
 
 > A beginner-friendly guide to Unreal Engine's high-performance Entity Component System
 
-Information have been collected from multiple sources and AI has been used to analyze it and create a well-structured presentation.
-It may be error proned but we will go through it manually and edit it.
 
-For more deep dive into mass we recommend [MassSample GitHub](https://github.com/Megafunk/MassSample) - Community sample project with documentation
 
-Code Examples will be added.
+> [!IMPORTANT]
+> Information have been collected from multiple sources and AI has been used to analyze it and create a well-structured presentation.
+It may be error proned but page is updated manually from time to time to fix these.
+
+
+> [!TIP]
+> For a more deep dive into mass we recommend [MassSample GitHub](https://github.com/Megafunk/MassSample) - Community sample project with documentation
 
 ## Table of Contents
 
 - [What is Mass?](#what-is-mass)
 - [Why Use Mass?](#why-use-mass)
+- [When NOT to Use Mass](#when-not-to-use-mass)
 - [Core Concepts](#core-concepts)
 - [Architecture Overview](#architecture-overview)
 - [Getting Started](#getting-started)
-- [When NOT to Use Mass](#when-not-to-use-mass)
 - [Additional Resources](#additional-resources)
 
 ---
@@ -28,7 +31,7 @@ Mass is Unreal Engine 5's **data-oriented framework** for handling massive numbe
 ### The Traditional Way vs. Mass
 
 **Traditional Unreal (Actor-Based):**
-- Each character is an Actor with its own logic and data
+- Each entity is an Actor with its own logic and data
 - Great for flexibility, but slow when you have thousands of entities
 - Data is scattered in memory, causing CPU cache misses
 
@@ -39,18 +42,12 @@ Mass is Unreal Engine 5's **data-oriented framework** for handling massive numbe
 - Perfect for crowds, flocks, particles, and more
 
 **Mix (Using both):**
-- By adding a UMassAgentComponent to an actor, a mass entity will be created for it based on the fragments/tags or traits you set.
-- A bridge between the general UE5 actor framework and Mass. A type of fragment that turns entities into "Agents" that can exchange data in either direction (or both ways).
-- Example: The player can be an actor that has it´s location synced to it´s corresponding mass entity. Other mass entities can use that data for it´s logic.
-
-### Key Philosophy
-
-Mass follows the **Entity Component System (ECS)** architecture pattern:
-- **Entities** = Lightweight IDs that point to data
-- **Fragments** (Components) = The actual data (transform, velocity, health, etc.)
-- **Processors** (Systems) = The logic that operates on the data
-
+- By adding a UMassAgentComponent to an actor, a mass entity will be created for it based on the fragments/tags or traits you set. This acts as a bridge between the general UE5 actor framework and Mass.
+- Special proccesors called UMassTranslators can then exchange data in either direction (or both ways).
+- Example: The player can be an actor that has it´s location synced to it´s corresponding mass entity. Other mass entities (like zombies) can use that data for it´s logic.
+- [Read more about translators](#Translator)
 ---
+
 <a name="why-use-mass"></a>
 ## Why Use Mass?
 
@@ -61,7 +58,7 @@ Mass follows the **Entity Component System (ECS)** architecture pattern:
 
 ### **Scalability**
 - Handle **thousands of entities** simultaneously
-- Add/remove components without inheritance complexity
+- Add/remove fragments without inheritance complexity
 - No deep class hierarchies to manage
 
 ### **Optimization**
@@ -70,7 +67,7 @@ Mass follows the **Entity Component System (ECS)** architecture pattern:
 - Batch processing for efficiency
 
 ### **Composability**
-- Build behavior by adding/removing components
+- Build behavior by adding/removing fragments
 - Mix and match fragments to create different entity types
 - No need for complex inheritance trees
 
@@ -108,8 +105,21 @@ While Mass is powerful, it's not always the right choice:
 
 ---
 
+
+
 <a name="core-concepts"></a>
 ## Core Concepts
+
+### Mass Terminology (ECS Translation)
+
+Mass uses different names to avoid confusion with existing Unreal code:
+
+| Standard ECS Term | Mass Term | Description |
+|-------------------|-----------|-----------|
+| Entity | Entity | Lightweight IDs that point to data |
+| Component | **Fragment** | The actual data (transform, velocity, health, etc.) |
+| System | **Processor** | The logic that operates on the data |
+
 
 ### 1. **Entity**
 
@@ -194,20 +204,180 @@ Movement Trait = [Transform Fragment + Velocity Fragment + Moving Tag]
 
 Traits make it easy to create entities with predefined behaviors.
 
+<a name="Translator"></a>
+### 8. **Translator**
+
+Translators are special processors that moves data between UE objects and Mass fragments.
+
+By adding a UMassAgentComponent: to an Actor, it automatically creates a Mass entity for that Actor based on the traits you assign on the component.
+
+A special UMassAgentSyncTrait can be used to create sync capabilities between UObject and mass.
+
+This gives the possibilites to sync in different directions (Actor → Mass, Mass → Actor, or Both).
+- MassToActor → The Mass entity is sending data to the actor.
+- ActorToMass → Actor is sending data to it´s mass entity.
+
+> [!IMPORTANT]
+> Each of these sync direction needs it´s own translator.
+
+
+
+#### Example: A Health Component on an actor that can sync both ways.
+##### Trait
+```c++
+
+USTRUCT()
+struct FHealthComponentWrapperFragment : public FObjectWrapperFragment
+{
+	GENERATED_BODY()
+	TWeakObjectPtr<UHealthComponent> Component;
+};
+
+UCLASS(MinimalAPI, BlueprintType, EditInlineNew, CollapseCategories, meta = (DisplayName = "Health Component Sync"))
+class UHealthSyncTrait : public UMassAgentSyncTrait
+{
+	GENERATED_BODY()
+
+protected:
+	UE_API virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
+};
+
+void UHealthSyncTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
+{
+	BuildContext.AddFragment<FHealthComponentWrapperFragment>();
+	BuildContext.AddFragment<FHealthFragment>();
+	
+	BuildContext.GetMutableObjectFragmentInitializers().Add([=](UObject& Owner, FMassEntityView& EntityView, const EMassTranslationDirection CurrentDirection)
+		{
+			UHealthComponent* HealthComp = nullptr;
+			if (AActor* AsActor = Cast<AActor>(&Owner))
+			{
+				HealthComp = AsActor->FindComponentByClass<UHealthComponent>();
+			}
+			if (HealthComp)
+			{
+				FHealthComponentWrapperFragment& ComponentFragment = EntityView.GetFragmentData<FHealthComponentWrapperFragment>();
+				ComponentFragment.Component = HealthComp;
+
+				FHealthFragment& HealthFragment = EntityView.GetFragmentData<FHealthFragment>();
+
+				// the mass entity is the authority
+				if (CurrentDirection ==  EMassTranslationDirection::MassToActor)
+				{
+					HealthComp->Health = HealthFragment.Value;
+				}
+				// actor is the authority
+				else
+				{
+					HealthFragment.Value = HealthComp->GetHealth();
+				}
+			}
+		});
+	//BothWays is bitwised so will be true for both ActorToMass and MassToActor.
+	if (EnumHasAnyFlags(SyncDirection, EMassTranslationDirection::ActorToMass) || BuildContext.IsInspectingData())
+	{
+		BuildContext.AddTranslator<UHealthComponentToMassTranslator>();
+	}
+
+	if (EnumHasAnyFlags(SyncDirection, EMassTranslationDirection::MassToActor) || BuildContext.IsInspectingData())
+	{
+		BuildContext.AddTranslator<UHealthComponentToActorTranslator>();
+	}
+}
+```
+##### Translator
+```c++
+//This header will be the same for UHealthComponentToActorTranslator
+UCLASS(MinimalAPI)
+class UHealthComponentToMassTranslator : public UMassTranslator
+{
+	GENERATED_BODY()
+
+public:
+	UE_API UHealthComponentToMassTranslator();
+
+protected:
+	UE_API virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+	UE_API virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+
+	FMassEntityQuery EntityQuery;
+};
+```
+```c++
+UHealthComponentToMassTranslator::UHealthComponentToMassTranslator()
+	: EntityQuery(*this)
+{
+	ExecutionFlags = (int32)EProcessorExecutionFlags::AllNetModes;
+	ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::SyncWorldToMass;
+	bRequiresGameThreadExecution = true;
+}
+
+void UHealthComponentToMassTranslator::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
+	AddRequiredTagsToQuery(EntityQuery);
+	EntityQuery.AddRequirement<FHealthComponentWrapperFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FHealthFragment>(EMassFragmentAccess::ReadWrite);
+}
+
+void UHealthComponentToMassTranslator::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
+	{
+		const TConstArrayView<FHealthComponentWrapperFragment> ComponentList = Context.GetFragmentView<FHealthComponentWrapperFragment>();
+		const TArrayView<FHealthFragment> HealthList = Context.GetMutableFragmentView<FHealthFragment>();
+		
+		for (FMassExecutionContext::FEntityIterator EntityIt = Context.CreateEntityIterator(); EntityIt; ++EntityIt)
+		{
+			if (const UHealthComponent* HealthComponent = ComponentList[EntityIt].Component.Get())
+			{
+				HealthList[EntityIt].Value = HealthComponent->GetHealth();
+			}
+		}
+	});
+}
+```
+
+```c++
+//----------------------------------------------------------------------//
+//  UMassCharacterMovementToActorTranslator
+//----------------------------------------------------------------------//
+UHealthComponentToActorTranslator::UHealthComponentToActorTranslator()
+	: EntityQuery(*this)
+{
+	ExecutionFlags = (int32)EProcessorExecutionFlags::AllNetModes;
+	ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::UpdateWorldFromMass;
+	bRequiresGameThreadExecution = true;
+}
+
+void UHealthComponentToActorTranslator::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
+	AddRequiredTagsToQuery(EntityQuery);
+	EntityQuery.AddRequirement<FHealthComponentWrapperFragment>(EMassFragmentAccess::ReadWrite);
+	EntityQuery.AddRequirement<FHealthFragment>(EMassFragmentAccess::ReadOnly);
+}
+
+void UHealthComponentToActorTranslator::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
+	{
+		const TArrayView<FHealthComponentWrapperFragment> ComponentList = Context.GetMutableFragmentView<FHealthComponentWrapperFragment>();
+		const TConstArrayView<FHealthFragment> HealthList = Context.GetFragmentView<FHealthFragment>();
+
+		for (FMassExecutionContext::FEntityIterator EntityIt = Context.CreateEntityIterator(); EntityIt; ++EntityIt)
+		{
+			if (UHealthComponent* HealthComponent = ComponentList[EntityIt].Component.Get())
+			{
+				HealthComponent->Value = HealthList[EntityIt].Value;
+			}
+		}
+	});
+}
+```
+
 ---
 
 <a name="architecture-overview"></a>
 ## Architecture Overview
-
-### Mass Terminology (ECS Translation)
-
-Mass uses different names to avoid confusion with existing Unreal code:
-
-| Standard ECS Term | Mass Term |
-|-------------------|-----------|
-| Entity | Entity |
-| Component | **Fragment** |
-| System | **Processor** |
 
 ### Processing Flow
 
@@ -370,16 +540,17 @@ void UDamageProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 
 ---
 
-## Pro Tips
+## Tips
 
 1. **Start Simple**: Begin with a few fragments and one processor before scaling up
 2. **Think in Data**: Focus on what data you need, not what objects do
 3. **Batch Operations**: Use command buffers to queue changes rather than modifying entities immediately
 4. **Profile Early**: Use Unreal's profiling tools to measure performance gains
-5. **Group Related Data**: Keep fragments that are always processed together in the same chunk
-6. **Use Tags Wisely**: Tags are free and excellent for filtering without data overhead
-7. **Learn from Examples**: Study UE5's City Sample to see Mass in action at scale
-
+5. **Use Tags Wisely**: Tags are excellent for filtering with less data overhead. Each archetype holds a bitset that contains the tag presence information.
+6. **Learn from Examples**: Study UE5's City Sample to see Mass in action at scale or go to MassSample Github for more examples.
+7. **Keep fragments focused**: If a fragment starts holding unrelated data (e.g., health + attack + attack speed), consider splitting it into multiple fragments.
+8. **Use traits to group fragments**: Traits let you assign multiple fragments together when needed, without bloating one fragment.
+9. **Think about update frequency**: If some data is rarely updated, it may belong in a different fragment so processors don’t touch it every frame.
 ---
 
 ## License
@@ -388,4 +559,4 @@ Mass is part of Unreal Engine 5 and follows Epic Games' licensing terms. Check t
 
 ---
 
-**Note**: Mass is marked as **Experimental** in Unreal Engine 5. While it's powerful and used in production (like the City Sample), APIs may change and Epic doesn't recommend shipping with experimental features without thorough testing.
+**Note**: Some of Mass plugins is marked as **Experimental** in Unreal Engine 5. While it's powerful and used in production (like the City Sample), APIs may change and Epic doesn't recommend shipping with experimental features without thorough testing.
