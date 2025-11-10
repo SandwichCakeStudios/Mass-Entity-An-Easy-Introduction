@@ -416,7 +416,7 @@ UDeathObserver::UDeathObserver()
 	Operation = EMassObservedOperation::Add;
 }
 
-void UCoreLane_UnitDeathObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+void UDeathObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	
@@ -424,7 +424,7 @@ void UCoreLane_UnitDeathObserver::ConfigureQueries(const TSharedRef<FMassEntityM
 
 }
 
-void UCoreLane_UnitDeathObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+void UDeathObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
 
 
