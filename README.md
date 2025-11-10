@@ -68,6 +68,7 @@ Mass is Unreal Engine 5's **data-oriented framework** for handling massive numbe
 
 ### **Composability**
 - Build behavior by adding/removing fragments
+- Designed for where a complex solution is built by combining smaller, interchangeable fragments.
 - Mix and match fragments to create different entity types
 - No need for complex inheritance trees
 
@@ -116,7 +117,7 @@ Mass uses different names to avoid confusion with existing Unreal code:
 
 | Standard ECS Term | Mass Term | Description |
 |-------------------|-----------|-----------|
-| Entity | Entity | Lightweight IDs that point to data |
+| Entity | **Entity** | Lightweight IDs that point to data |
 | Component | **Fragment** | The actual data (transform, velocity, health, etc.) |
 | System | **Processor** | The logic that operates on the data |
 
@@ -207,6 +208,8 @@ Traits make it easy to create entities with predefined behaviors.
 <a name="Translator"></a>
 ### 8. **Translator**
 
+
+
 Translators are special processors that moves data between UE objects and Mass fragments.
 
 By adding a UMassAgentComponent: to an Actor, it automatically creates a Mass entity for that Actor based on the traits you assign on the component.
@@ -285,7 +288,7 @@ void UHealthSyncTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildConte
 	}
 }
 ```
-##### Translator
+##### UMassTranslator
 ```c++
 //This header will be the same for UHealthComponentToActorTranslator
 UCLASS(MinimalAPI)
@@ -371,6 +374,223 @@ void UHealthComponentToActorTranslator::Execute(FMassEntityManager& EntityManage
 			}
 		}
 	});
+}
+```
+
+<a name="Observers"></a>
+### 9. **Observers**
+
+- React to fragment/tag changes or entity initialization
+- Only run when specific changes occur (not every frame)
+- Use `UMassObserverProcessor` for this pattern
+
+#### Example: A Death Observer that calls a subsystem on the gamethread.
+```c++
+UCLASS()
+class UDeathObserver : public UMassObserverProcessor
+{
+	GENERATED_BODY()
+
+public:
+	UDeathObserver();
+
+protected:
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+
+	FMassEntityQuery EntityQuery;
+
+private:
+
+};
+```
+
+```c++
+
+UDeathObserver::UDeathObserver()
+	: EntityQuery(*this)
+{
+	bRequiresGameThreadExecution = true;  
+	ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::AllNetModes);
+	ObservedType = FDeadTag::StaticStruct();
+	Operation = EMassObservedOperation::Add;
+}
+
+void UCoreLane_UnitDeathObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
+	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	
+	ProcessorRequirements.AddSubsystemRequirement<UGameModeSubsystem>(EMassFragmentAccess::ReadWrite);
+
+}
+
+void UCoreLane_UnitDeathObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+
+
+
+	UGameModeSubsystem& GameModeSubsystem = Context.GetMutableSubsystemChecked<UGameModeSubsystem>();
+
+	TArray<FVector> DeathLocations;
+
+	EntityQuery.ForEachEntityChunk(Context, [this, &DeathLocations](FMassExecutionContext& Context)
+		{
+
+			DeathLocations.Reserve(DeathLocations.Num() + Context.GetNumEntities());
+
+			
+			const TConstArrayView<FTransformFragment> Transforms = Context.GetFragmentView<FTransformFragment>();
+
+			for (FMassExecutionContext::FEntityIterator EntityIt = Context.CreateEntityIterator(); EntityIt; ++EntityIt)
+			{
+				const FTransformFragment& Transform = Transforms[EntityIt];
+
+				DeathLocations.Add(Transform.GetTransform().GetLocation());
+
+			
+			}
+
+			Context.Defer().DestroyEntities(Context.GetEntities());
+
+			
+		});
+
+	if (!DeathLocations.IsEmpty())
+	{
+		GameModeSubsystem.BroadcastUnitsDeath(DeathLocations);
+	}
+}
+```
+
+<a name="Signals"></a>
+### 9. **Signals**
+- Send named signals between entities
+- Lightweight event system for entity communication
+- Part of the MassSignals module
+
+#### Example: A Spawn observer that will use signals to tell the statetree to tick.
+```c++
+UCLASS()
+class UEntitySpawnedInWorld : public UMassObserverProcessor
+{
+	GENERATED_BODY()
+
+public:
+	UEntitySpawnedInWorld();
+
+protected:
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+
+	FMassEntityQuery EntityQuery;
+
+private:
+
+
+
+};
+```
+
+```c++
+
+
+UEntitySpawnedInWorld::UEntitySpawnedInWorld()
+	: EntityQuery(*this)
+{
+	ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::AllNetModes);
+	ObservedType = FEntitySpawnedTag::StaticStruct(); //Can be added by a trait or other processor.
+	Operation = EMassObservedOperation::Add;
+}
+
+void UEntitySpawnedInWorld::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
+
+	EntityQuery.AddSubsystemRequirement<UMassSignalSubsystem>(EMassFragmentAccess::ReadWrite);
+
+}
+
+void UEntitySpawnedInWorld::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+
+
+
+	EntityQuery.ForEachEntityChunk(Context, [](FMassExecutionContext& Context)
+		{
+			UMassSignalSubsystem& SignalSubsystem = Context.GetMutableSubsystemChecked<UMassSignalSubsystem>();
+
+	
+			for (FMassExecutionContext::FEntityIterator EntityIt = Context.CreateEntityIterator(); EntityIt; ++EntityIt)
+			{
+				
+				const FMassEntityHandle Entity = Context.GetEntity(EntityIt);
+				Context.Defer().RemoveTag<FEntitySpawnedTag>(Entity);
+			}
+
+			SignalSubsystem.SignalEntities(UE::Mass::Signals::NewStateTreeTaskRequired, Context.GetEntities());
+
+		});
+}
+
+```
+#### Example: Listening to signals from a processor.
+```c++
+UCLASS(MinimalAPI)
+class UTestSignalProcessor : public UMassSignalProcessorBase
+{
+	GENERATED_BODY()
+
+public:
+	UTestSignalProcessor(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+	
+protected:
+	virtual void InitializeInternal(UObject& Owner, const TSharedRef<FMassEntityManager>& EntityManager) override;
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+	virtual void SignalEntities(FMassEntityManager& EntityManager, FMassExecutionContext& Context, FMassSignalNameLookup& EntitySignals) override;
+};
+```
+```c++
+UTestSignalProcessor::UTestSignalProcessor(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+
+	ExecutionOrder.ExecuteBefore.Add(UE::Mass::ProcessorGroupNames::Tasks);
+
+}
+
+void UTestSignalProcessor::InitializeInternal(UObject& Owner, const TSharedRef<FMassEntityManager>& EntityManager)
+{
+	Super::InitializeInternal(Owner, EntityManager);
+
+	UMassSignalSubsystem* SignalSubsystem = UWorld::GetSubsystem<UMassSignalSubsystem>(Owner.GetWorld());
+
+	SubscribeToSignal(*SignalSubsystem, UE::Mass::Signals::NewStateTreeTaskRequired);
+}
+
+void UTestSignalProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
+	
+	EntityQuery.AddSubsystemRequirement<UMassSignalSubsystem>(EMassFragmentAccess::ReadWrite);
+
+	
+}
+
+void UTestSignalProcessor::SignalEntities(FMassEntityManager& EntityManager, FMassExecutionContext& Context, FMassSignalNameLookup& EntitySignals)
+{
+
+	EntityQuery.ForEachEntityChunk(Context, [&EntitySignals](FMassExecutionContext& Context)
+		{
+			
+			for (FMassExecutionContext::FEntityIterator EntityIt = Context.CreateEntityIterator(); EntityIt; ++EntityIt)
+			{
+				TArray<FName> Signals;
+				EntitySignals.GetSignalsForEntity(Context.GetEntity(EntityIt), Signals);
+				if(Signals.Contains(UE::Mass::Signals::NewStateTreeTaskRequired))
+				{
+					//Do something when NewStateTreeTaskRequired signal is called.
+				}
+			}
+		});
 }
 ```
 
@@ -467,7 +687,7 @@ bool UTestSpawnerSubsystem::SpawnEntity_Internal(UMassEntityConfigAsset* MassEnt
 ```
 - **MassEntityConfig**: Asset defining entity templates with traits
 
-### Commands and Signals
+### Commands
 
 **Deferred Commands:**
 - Queue operations to add/remove fragments or create/destroy entities
@@ -507,15 +727,7 @@ void UDamageProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 }
 ```
 
-**Observers:**
-- React to fragment/tag changes or entity initialization
-- Only run when specific changes occur (not every frame)
-- Use `UMassObserverProcessor` for this pattern
 
-**Signals:**
-- Send named signals between entities
-- Lightweight event system for entity communication
-- Part of the MassSignals module
 
 ---
 
@@ -530,7 +742,11 @@ void UDamageProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 - [MassSample GitHub](https://github.com/Megafunk/MassSample) - Community sample project with documentation
 - [Your First 60 Minutes with Mass](https://dev.epicgames.com/community/learning/tutorials/JXMl/unreal-engine-your-first-60-minutes-with-mass) - Beginner tutorial
 - [State of Unreal: Large Numbers of Entities with Mass](https://www.youtube.com/watch?v=f9q8A-9DvPo) - Video presentation by Epic
+- [Understand MASS with Unreal Engine](https://www.youtube.com/watch?v=eJR82WyIl_U) - Video presentation by Epic
+- [Large Numbers of Entities with Mass in UE5](https://www.youtube.com/watch?v=f9q8A-9DvPo) - Video presentation by Epic
+- [Understand MASS with Unreal Engine](https://www.youtube.com/watch?v=eJR82WyIl_U) - Video presentation Rogue Entity
 
+  
 ### Related Systems
 - **ZoneGraph**: Spline-based navigation for Mass crowds (sidewalks, roads, etc.). Much cheaper than NavMesh but very limited.
 - **StateTree**: Lightweight state machine for Mass AI. 
@@ -548,7 +764,7 @@ void UDamageProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 4. **Profile Early**: Use Unreal's profiling tools to measure performance gains
 5. **Use Tags Wisely**: Tags are excellent for filtering with less data overhead. Each archetype holds a bitset that contains the tag presence information.
 6. **Learn from Examples**: Study UE5's City Sample to see Mass in action at scale or go to MassSample Github for more examples.
-7. **Keep fragments focused**: If a fragment starts holding unrelated data (e.g., health + attack + attack speed), consider splitting it into multiple fragments.
+7. **Keep fragments focused**: If a fragment starts holding unrelated data (e.g., health + attack + attack speed), consider splitting it into multiple fragments (HealthFragment,AttackFragment).
 8. **Use traits to group fragments**: Traits let you assign multiple fragments together when needed, without bloating one fragment.
 9. **Think about update frequency**: If some data is rarely updated, it may belong in a different fragment so processors don’t touch it every frame.
 ---
