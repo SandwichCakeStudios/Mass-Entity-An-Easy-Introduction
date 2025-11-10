@@ -50,59 +50,93 @@ Mass is Unreal Engine 5's **data-oriented framework** for handling massive numbe
 
 <a name="why-use-mass"></a>
 ## Why Use Mass?
+Mass is built for games or simulations that need to handle lots of entities efficiently. Here's why it shines:
 
-### **Performance**
-- **Cache-friendly memory layout**: Similar data stored contiguously in arrays
-- **Multi-threading**: Process different chunks of entities in parallel
-- **Minimal cache waste**: CPU can load and process data efficiently
+### **1. It’s Super Fast**
+Mass is designed with performance in mind. Here’s how it helps your game run smoother:
 
-### **Scalability**
-- Handle **thousands of entities** simultaneously
-- Add/remove fragments without inheritance complexity
-- No deep class hierarchies to manage
+- It stores similar data together in memory, so the CPU can grab it quickly.
 
-### **Optimization**
-- Data grouped into **Archetypes** and **Chunks**
-- Reduced code branching
-- Batch processing for efficiency
+- It can process many entities at once using multiple threads.
 
-### **Composability**
-- Build behavior by adding/removing fragments
-- Designed for where a complex solution is built by combining smaller, interchangeable fragments.
-- Mix and match fragments to create different entity types
-- No need for complex inheritance trees
+- It avoids wasting memory or CPU time on unused data.
+
+If you want your game to handle hundreds or thousands of things happening at once — like bullets, enemies, or crowds — Mass is a great fit.
+
+### **2. It’s Easy to Mix and Match**
+Mass uses fragments to define what an entity can do. That means:
+
+- You can build different types of entities by combining different fragments.
+
+- Want a flying enemy? Add a “Flight” fragment.
+
+- Want a boss enemy? Add “Health,” “AI,” and “ExplosionOnDeath” fragments.
+
+No need to create a new class for every variation — just plug in the pieces you need.
+
+### **3. It’s Built for Optimization**
+Mass organizes data into Archetypes and Chunks — fancy terms for grouping similar entities together. This helps:
+
+- Reduce unnecessary code branching (no more “if this is a player…” checks everywhere).
+
+- Process entities in batches, which is much faster than one-by-one.
+
+
+### **4. It Encourages Clean, Modular Design**
+Mass pushes you to think in terms of data and behavior, not inheritance. That means:
+
+- Your code is easier to maintain and extend.
+
+- You can mix and match fragments to create different entity types.
+
+- You can avoid the spaghetti code that often comes with deep class trees.
+
 
 ---
 
 <a name="when-not-to-use-mass"></a>
 ## When NOT to Use Mass
 
-While Mass is powerful, it's not always the right choice:
+Mass is powerful, but it’s not always the right tool. Here’s when you might want to avoid it:
 
-### **Indirect Behavior**
-- Logic lives in processors, not on entities
-- Harder to trace behavior for specific entities
-- Different mental model than traditional OOP
+### **1. If You Want Behavior Attached to Objects**
+In Mass, logic doesn’t live inside the entities. Instead, it lives in separate systems called processors. This means:
 
-### **Costly Structural Changes**
-- Adding/removing fragments frequently can be expensive
-- Causes entities to migrate between archetypes
-- Mitigated by deferred command buffers, but still has overhead
+- You can’t just open an entity and see what it does.
 
-### **Overhead for Small Scales**
-- Data systems have setup and processing overhead
-- Not efficient for small numbers of entities (< 50)
-- Traditional Actors might be simpler and faster
+- You have to look at the processors to understand behavior.
 
-### **Over-Granular Fragments**
-- Too many tiny fragments can hurt performance
-- Creates excessive chunks and ruins cache locality
-- Solution: Group fields that are processed together
+- It’s a different way of thinking than traditional object-oriented programming (OOP).
 
-### **Complex Data Management**
-- Requires careful control over read/write access
-- Misusing Shared or Const-Shared data can bloat processing
-- Steeper learning curve than traditional programming
+If you prefer the classic “this object does this” model, Mass might feel confusing.
+
+### **2. If You Constantly Add or Remove Components**
+Changing an entity’s structure (like adding or removing fragments) is expensive. Why?
+
+- Every time you do it, the entity might need to move to a different memory layout (called an archetype).
+
+- That takes time and resources.
+
+- Mass can handle this in certain ways, but if your game logic changes entities all the time, performance might suffer.
+
+### **3. If You Only Have a Few Entities**
+Mass is designed for lots of entities — think hundreds or thousands. If you’re only dealing with a handful (like 10–50), it’s probably overkill. In those cases, using traditional Actors or Components is simpler and easier to debug.
+
+### **4. If You Break Things into Too Many Tiny Pieces**
+Mass encourages breaking data into fragments — but don’t go overboard. If you split everything into tiny fragments:
+
+- You’ll might end up with too many memory chunks.
+
+- That may ruin performance and makes things harder to manage.
+
+Instead, group related data together when it makes sense.
+
+### **5. If You’re Not Ready to Manage Data Carefully**
+Mass gives you a lot of control — but that means more responsibility. You need to:
+
+- Know when data is read-only, shared, or writable.
+
+If you’re not comfortable managing memory access patterns, Mass can be tricky to use correctly.
 
 ---
 
@@ -129,6 +163,13 @@ An Entity is just a **unique ID** that points to a collection of Fragments. It's
 ```
 Entity #42 = [Transform Fragment, Velocity Fragment, Health Fragment]
 ```
+```c++
+const FMassEntityHandle Entity = Context.GetEntity(EntityIt);
+if (!EntityManager.IsEntityValid(Entity))
+{
+	// Entity is invalid
+}
+```
 
 Entities have **no logic** themselves—they're purely data containers.
 
@@ -143,9 +184,32 @@ Fragments are **pieces of data** stored in tightly-packed arrays. They represent
 - Health points
 - AI state
 
+```c++
+USTRUCT()
+struct FHealthFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	uin16 Health = 100;
+
+};
+```
+
 **Special Types of Fragments:**
 
 - **Shared Fragment**: Data shared across multiple entities to save memory (e.g., all enemies of the same type share the same stats)
+```c++
+USTRUCT()
+struct FMassStateTreeSharedFragment : public FMassConstSharedFragment
+{
+	GENERATED_BODY()
+
+	FMassStateTreeSharedFragment() = default;
+
+	UPROPERTY()
+	TObjectPtr<UStateTree> StateTree = nullptr;
+};
+```
 - **Chunk Fragment**: Applied to a group of entities rather than individual ones
 - **Tag**: A fragment with no data—used purely for filtering (like a label)
 
@@ -767,6 +831,7 @@ void UDamageProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 7. **Keep fragments focused**: If a fragment starts holding unrelated data (e.g., health + attack + attack speed), consider splitting it into multiple fragments (HealthFragment,AttackFragment).
 8. **Use traits to group fragments**: Traits let you assign multiple fragments together when needed, without bloating one fragment.
 9. **Think about update frequency**: If some data is rarely updated, it may belong in a different fragment so processors don’t touch it every frame.
+10. **Data type size**: Consider what data type you really need. Maybe you can use uint16 instead of int32? Size matters in the long run.
 ---
 
 ## License
