@@ -122,8 +122,6 @@ Mass is designed for lots of entities — think hundreds or thousands. If you’
 ### **4. If You Break Things Into Too Many Tiny Pieces**
 Mass encourages breaking data into fragments — but don’t go overboard. If you split everything into tiny fragments:
 
-- You’ll might end up with too many memory chunks.
-
 - That may ruin performance and makes things harder to manage.
 
 Instead, group related data together when it makes sense.
