@@ -6,7 +6,6 @@
 
 > [!IMPORTANT]
 > Information have been collected from multiple sources and AI has been used to analyze it and create a well-structured presentation.
-It may be error proned but page is updated manually from time to time to fix these.
 
 
 > [!TIP]
@@ -16,7 +15,7 @@ It may be error proned but page is updated manually from time to time to fix the
 
 - [What is Mass?](#what-is-mass)
 - [Why Use Mass?](#why-use-mass)
-- [When NOT to Use Mass](#when-not-to-use-mass)
+- [When Mass Falls Short](#when-mass-fall-short)
 - [Core Concepts](#core-concepts)
 - [Architecture Overview](#architecture-overview)
 - [Getting Started](#getting-started)
@@ -77,15 +76,13 @@ No need to create a new class for every variation — just plug in the pieces yo
 ### **3. It’s Built for Optimization**
 Mass organizes data into Archetypes and Chunks — fancy terms for grouping similar entities together. This helps:
 
-- Reduce unnecessary code branching (no more “if this is a player…” checks everywhere).
-
 - Process entities in batches, which is much faster than one-by-one.
 
 
 ### **4. It Encourages Clean, Modular Design**
 Mass pushes you to think in terms of data and behavior, not inheritance. That means:
 
-- Your code is easier to maintain and extend.
+- Data is sperated from behavior so it can be easier to maintain and extend.
 
 - You can mix and match fragments to create different entity types.
 
@@ -94,8 +91,8 @@ Mass pushes you to think in terms of data and behavior, not inheritance. That me
 
 ---
 
-<a name="when-not-to-use-mass"></a>
-## When NOT to Use Mass
+<a name="when-mass-fall-short"></a>
+## When Mass Falls Short
 
 Mass is powerful, but it’s not always the right tool. Here’s when you might want to avoid it:
 
@@ -122,7 +119,7 @@ Changing an entity’s structure (like adding or removing fragments) is expensiv
 ### **3. If You Only Have a Few Entities**
 Mass is designed for lots of entities — think hundreds or thousands. If you’re only dealing with a handful (like 10–50), it’s probably overkill. In those cases, using traditional Actors or Components is simpler and easier to debug.
 
-### **4. If You Break Things into Too Many Tiny Pieces**
+### **4. If You Break Things Into Too Many Tiny Pieces**
 Mass encourages breaking data into fragments — but don’t go overboard. If you split everything into tiny fragments:
 
 - You’ll might end up with too many memory chunks.
@@ -130,6 +127,22 @@ Mass encourages breaking data into fragments — but don’t go overboard. If yo
 - That may ruin performance and makes things harder to manage.
 
 Instead, group related data together when it makes sense.
+> [!IMPORTANT]
+> Sometimes it still make sense to keep it small.
+> For example let´s say we have a game where entities can have health and attack.
+>
+> **Example 1:**
+> 
+> - Not all entities with health can attack, Only entities with both fragments should be processed by an AttackProcessor
+> 
+> - **We should separate HealthFragment and AttackFragment for more control and efficient querying.**
+>
+> **Example 2:**
+> 
+> - But in simple cases like all entities in the system behave the same (e.g., all are enemies that attack and take damage).
+> 
+> - **We might consider combining Health and Attack in to a single fragment.** (Make sense if we won´t add new functionality later)
+
 
 ### **5. If You’re Not Ready to Manage Data Carefully**
 Mass gives you a lot of control — but that means more responsibility. You need to:
@@ -210,8 +223,39 @@ struct FMassStateTreeSharedFragment : public FMassConstSharedFragment
 	TObjectPtr<UStateTree> StateTree = nullptr;
 };
 ```
-- **Chunk Fragment**: Applied to a group of entities rather than individual ones
-- **Tag**: A fragment with no data—used purely for filtering (like a label)
+- **Chunk Fragment**: Applied to a chunk of entities rather than individual ones. Filtering can be. (More reasearch need on this)
+```c++
+USTRUCT()
+struct FValidChunkFragment : public FMassChunkFragment
+{
+	GENERATED_BODY();
+
+	/** Update the ticking frequency of the chunk and return if this chunk should be process this frame */
+	static bool IsValid(FMassExecutionContext& Context);
+
+	float TimeUntilNextTick = 0.0f;
+	bool bInitialized = false;
+};
+```
+```c++
+EntityQuery.AddChunkRequirement<FValidChunkFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.SetChunkFilter([](const FMassExecutionContext& Context)
+	{
+		return FValidChunkFragment::IsValid(Context);
+	});
+```
+
+- **Tag**: A struct with no data—used purely for filtering (like a label)
+```c++
+USTRUCT()
+struct FDeathTag : public FMassTag
+{
+	GENERATED_BODY()
+};
+```
+```c++
+EntityQuery.AddTagRequirement<FDeathTag>(EMassFragmentPresence::All);
+```
 
 ### 3. **Archetype**
 
